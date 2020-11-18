@@ -11,7 +11,7 @@ import templates.osd.tpl as osdtpl
 import pandas as pd
 
 from bokeh.plotting import figure, output_file, show
-from bokeh.models import CustomJS, Dropdown, ColumnDataSource, CheckboxGroup, Select, Button, Slider
+from bokeh.models import CustomJS, Dropdown, ColumnDataSource, CheckboxGroup, Select, Button, Slider, TapTool
 from bokeh.layouts import column, row, widgetbox
 from bokeh.models import HoverTool
 
@@ -640,12 +640,12 @@ def process_repop_end(words):
     pass
 
 def print_write_op_latency(ops):
-    df = gen_write_op_df(ops)  
-    output_file("osd_write_op")
-    
-    TOOLS="crosshair,pan,wheel_zoom,box_zoom,reset,hover,save"
-    
-    # all_data = {"enqueue_time": enqueue_time, "op_lat": op_lat, "before_enqueue_lat": before_enqueue_lat, "opid": opid} 
+    df = gen_write_op_df(ops)
+    output_file("osd_write_op.html")
+
+    TOOLS="crosshair,pan,wheel_zoom,box_zoom,reset,hover,save,tap,lasso_select"
+
+    # all_data = {"enqueue_time": enqueue_time, "op_lat": op_lat, "before_enqueue_lat": before_enqueue_lat, "opid": opid}
     TOOLTIPS=[
               ("opid", "@opid"), 
               ("enqueue_time", "@enqueue_time"), 
@@ -661,13 +661,17 @@ def print_write_op_latency(ops):
     hover = HoverTool(
     tooltips = TOOLTIPS
     )
-    
-    p = figure(plot_width=800, plot_height=600, tools = TOOLS, tooltips = TOOLTIPS, active_scroll = 'wheel_zoom', x_axis_label='time', y_axis_label='latency') 
+
+    p = figure(plot_width=700, plot_height=600, tools = TOOLS, tooltips = TOOLTIPS, active_scroll = 'wheel_zoom', x_axis_label='time', y_axis_label='latency')
     p.add_tools(hover)
-    
+    p2 = figure(plot_width=700, plot_height=600, tools = "" , tooltips = TOOLTIPS, x_axis_label='time', y_axis_label='latency')
+    p2.add_tools(hover)
+
     source = ColumnDataSource(df)
     p.circle('opts', 'op_lat', source = source, legend_label="osd write op", size=5, color='color')
-    
+    source2 = ColumnDataSource(df)
+    p2.circle('opts', 'op_lat', source = source2, legend_label="osd write op", size=5, color='color')
+
     slider = Slider(start=0, end=100, value=0, step=1, title="latency percentage")
     
     menu = ["before_enqueue_lat", "queue_lat", "dequeue_lat", "bluestore_lat"]
@@ -696,7 +700,44 @@ def print_write_op_latency(ops):
                         )
     slider.js_on_change('value', callback)     
     select.js_on_change("value", callback)
-    layout = row(column(select,slider), p) 
+    callback2 = CustomJS(args=dict(source=source, source2=source2, select=select), code="""
+                        var selected = source.selected.indices
+                        var d1 = source.data
+                        var d2 = source2.data
+
+                        /* Empty the array to prepare the new selected ones */
+                        Object.keys(d2)
+                         .forEach(k => d2[k] = [])
+                         for (var i = 0; i < selected.length; i++) {
+
+                            /*
+                             * The index needs to be filled to avoid the runtime
+                             * error(elements length inside the column data
+                             * source is not compatible).
+                             */
+                            d2['index'].push((i, i))
+                            Object.keys(d2)
+                            .filter(k => k != 'index')
+                            .forEach(k => d2[k].push(d1[k][selected[i]]))
+                            for (var j = 0; j < d1['opts'].length; j++) {
+
+                                /*
+                                 * Find out the dots that the op latency is
+                                 * bigger than the selected one.
+                                 */
+                                if (d1['op_lat'][j] > d1['op_lat'][selected[i]]) {
+                                    d2['index'].push((j, j))
+                                    Object.keys(d2)
+                                    .filter(k => k != 'index')
+                                    .forEach(k => d2[k].push(d1[k][j]))
+                                }
+                            }
+                        }
+                        source2.change.emit()
+                        """
+                        )
+    source.selected.js_on_change('indices', callback2)
+    layout = row(column(p, select,slider), p2)
     show(layout)
 
 def remove_no_reply_op(ops):
